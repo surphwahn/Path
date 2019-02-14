@@ -1,0 +1,26 @@
+{
+  "DATABASE":{
+    "host": "localhost",
+    "user": "root",
+    "password": "",
+    "name": "test_boostrap"
+  },
+  "FILE":{
+    "max_size":  5242880
+  },
+  "PROJECT":{
+    "name": "Path",
+    "status": "production",
+    "version": "1.0",
+    "directory": "",
+    "server": "path.loc",
+    "protocol": "http",
+    "_comment":"SSE/WS can be value of watch_method",
+    "watch_method":"SSE"
+  },
+  "WEBSOCKET":{
+    "host": "path.loc",
+    "port": 443,
+    "scheme": "SSL"
+  }
+}

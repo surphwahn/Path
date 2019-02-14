@@ -13,5 +13,7 @@ interface MiddleWare
      * @return mixed
      * @internal param $params
      */
-    public function Control(Request $request, Response $response);
+    public function validate(Request $request, Response $response):bool;
+    public function fallBack(Request $request, Response $response);
+
 }

@@ -38,7 +38,7 @@ class Request
         $this->server = (object)$_SERVER;
     }
     public function fetch($key){
-        return @$_REQUEST[$key];
+        return @$_REQUEST[$key] ?? null;
     }
 
     /**
@@ -53,18 +53,6 @@ class Request
         return @$_FILES[$name];
     }
 
-    /**
-     * @param $method
-     * @param null $fallback
-     * @return object
-     */
-    public static function MiddleWare(
-        $method,
-        $fallback = null
-    ){
-        $fallback = is_callable($fallback) ? $fallback:$fallback;
-        return (object)["method" => $method,"fallback" => $fallback];
-    }
 
 
 }

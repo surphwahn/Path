@@ -1,6 +1,17 @@
 <?php
-require_once "Core/kernel.php";
+ini_set(
+    'session.use_cookies',
+    false
+);
+ini_set(
+    'session.cache_limiter',
+    false
+);
+require_once "core/kernel.php";
 load_class("CLI/Console");
+import("core/Classes/CLI/CInterface",
+    "core/Classes/CLI/Console"
+);
 
 $console = new \Path\Console($argv);
 

@@ -46,7 +46,6 @@ class Response
 //        echo "file_path: ". $file_path.PHP_EOL;
         $file = $_SERVER['DOCUMENT_ROOT'].DIRECTORY_SEPARATOR.$this->build_path."/".$file_path;
         $public_path = treat_path($this->build_path);
-
         if(!file_exists($file))
             throw new PathException(" \"{$file_path}\" does not exist");
 
@@ -74,6 +73,48 @@ class Response
         $this->headers = ["Content-Type" => "application/octet-stream; charset=UTF-8"];
         return $this;
     }
+
+    public function SSEStream($raw_data,$id = null,$status = 200){
+        if(!$id)
+            $id = time();
+
+//        [
+//          "event" => "response",
+//        ];
+        $data = "";
+        $data .="id: {$id}".PHP_EOL;
+        if(is_array($raw_data)){
+            foreach ($raw_data as $event => $response){
+                $data .="event: $event".PHP_EOL;
+                if(is_array($response))
+                    $response = json_encode($response);
+
+                $response = preg_split ('/$\R?^/m', $response);
+                foreach ($response as $line){
+                    if(strlen(trim($line)))
+                        $data .="data: {$line}".PHP_EOL;
+                }
+                $data .= PHP_EOL;
+            }
+        }else{
+            if(strlen($raw_data) > 0){
+                $response = preg_split ('/$\R?^/m', $raw_data);
+                foreach ($response as $line){
+                    if(strlen(trim($line)))
+                        $data .="data: {$line}".PHP_EOL;
+                }
+                $data .= PHP_EOL;
+            }
+        }
+        $this->content = $data;
+        $this->status = $status;
+        $this->headers = [
+            "Content-Type" =>  "text/event-stream; charset=UTF-8",
+            "Cache-Control" => "no-cache"
+            ];
+        return $this;
+    }
+
     public function redirect($url){
         header("location: {$url}");
     }

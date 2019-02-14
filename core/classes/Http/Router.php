@@ -24,12 +24,12 @@ import(
 class Router
 {
     public  $request;
-    public $root_path;
+    public  $root_path;
     private $database;
     private $response_instance;
     private $build_path = "";
-    private $controllers_path = "Path/Controllers/";
-    private $controllers_namespace = "Path\Controller\\";
+    private $controllers_path = "Path/Controllers/Route/";
+    private $controllers_namespace = "Path\Controller\Route\\";
     private $middleware_path = "Path/Http/MiddleWares/";
     private $middleware_namespace = "Path\Http\MiddleWare\\";
     private $assigned_paths = [//to hold all paths assigned
@@ -195,7 +195,10 @@ class Router
             throw new RouterException("Callback function expected to return an instance of Response Class");
         http_response_code($response->status);//set response code
         self::set_header($response->headers);//set header
-        die($response->content);
+        print($response->content);
+        @ob_flush();
+        @flush();
+        die();
     }
 
     /**
@@ -313,15 +316,73 @@ class Router
         return (object) $params;
     }
 
+    private function validateAllMiddleWare($middle_wares,$params,$_path,$real_path){
+        if(!is_array($middle_wares) || is_string($middle_wares))
+            $middle_wares = [$middle_wares];
+
+        $request = new Request();
+        $request->params = $params;
+        foreach ($middle_wares as $middle_ware){
+//            echo $middle_ware;
+            if($middle_ware) {
+                $middle_ware_name = explode("\\", $middle_ware);
+                $middle_ware_name = $middle_ware_name[count($middle_ware_name) - 1];
+//            Load middleware class
+                import("{$this->middleware_path}{$middle_ware_name}");
+                $ini_middleware = new $middle_ware();
+
+                if ($ini_middleware instanceof MiddleWare) {
+//            initialize middleware
+//                call the fall_back response
+                    $fallback_response = $ini_middleware->fallBack($request,$this->response_instance);
+
+
+//            Check middle ware return
+                    $check_middle_ware = $ini_middleware->validate($request, $this->response_instance);
+                    if (!$check_middle_ware) {//if the middle ware control method returns false
+
+                        if (!is_null($fallback_response)) {//if user has a fallback method
+
+                            if ($fallback_response && !$fallback_response instanceof Response){
+                                throw new RouterException(" \"fallBack\" method for \"{$middle_ware_name}\" MiddleWare is expected to return an instance of Response");
+                            }else{
+                                $this->write_response($fallback_response);
+                                return true;
+                            }
+
+                        }
+
+                        if ($this->exception_callback) {
+                            $exception_callback = call_user_func_array($this->exception_callback, [$request, $this->response_instance, ['error_msg' => "MiddleWare validation failed for \"{$real_path}\""]]);
+                            if ($exception_callback instanceof Response) {
+                                $this->write_response($exception_callback);
+                            }
+                        } else {
+                            throw new RouterException("MiddleWare validation failed for \"{$real_path}\"");
+                        }
+
+                    }
+                }else{
+                    throw new RouterException("Expected \"{$middle_ware->method}\" to implement \"Path\\Http\\MiddleWare\" interface in \"{$_path}\"");
+                }
+            }
+        }
+
+
+
+    }
+
     /**
      * @param $method
      * @param $root
-     * @param $_path
+     * @param $path
      * @param $callback
      * @param null $middle_ware
+     * @param null $fallback
      * @param bool $is_group
      * @return bool
      * @throws RouterException
+     * @internal param $_path
      */
     private function response(
         $method,
@@ -329,8 +390,12 @@ class Router
         $path,
         $callback,
         $middle_ware = null,
+        $fallback = null,
         $is_group = false
     ){
+
+        if(!$path || is_null($path))
+            throw new RouterException("Specify Path for your router");
 
         $_path = $this::joinPath($root,$path);
         $real_path = trim($this->real_path);
@@ -345,37 +410,8 @@ class Router
             "method"    => $method,
             "is_group"  => $is_group
         ];
-        if(!is_null($middle_ware)){
-            $middle_ware_name =  explode("\\",$middle_ware->method);
-            $middle_ware_name = $middle_ware_name[count($middle_ware_name)-1];
-//            Load middleware class
-            import("{$this->middleware_path}{$middle_ware_name}");
 
-            if(!class_implements($this->middleware_namespace.$middle_ware_name)['Path\Http\MiddleWare'])
-                throw new RouterException("Expected \"{$middle_ware->method}\" to implement \"MiddleWare\" interface in \"{$_path}\"");
-            $fallback = null;
-            if($middle_ware->fallback != null || $middle_ware->fallback) {
-                $fallback = ($middle_ware->fallback) ? $middle_ware->fallback : null;
-                $request = new Request();
-                $request->params = $params;
-                $fallback = is_callable($fallback) ?  $fallback($this->request,$this->response_instance): null;
-            }
-
-            if($fallback != null && !$fallback instanceof Response)
-                throw new RouterException("Expected middleware method to be instance of Response");
-
-//            Check middle ware return
-            $request = new Request();
-            $request->params = $params;
-            $check_middle_ware = (new $middle_ware->method())->Control($request,$this->response_instance);
-            if(!$check_middle_ware){//if the middle ware class returns false
-                if(!is_null($fallback)){//if there is a fallback function parsed
-                    $this->write_response($fallback);
-                    return true;
-                }
-                return true;
-            }
-        }
+        $this->validateAllMiddleWare($middle_ware,$params,$_path,$real_path);
 
         //        Set the path to list of paths
 
@@ -388,7 +424,7 @@ class Router
             $request = new Request();
             $request->params = $params;
             if(is_string($callback)){
-                $_callback = $this->breakController($callback);
+                $_callback = $this->breakController($callback,$params);
 
                 try{
                     $class = $_callback->ini_class->{$_callback->method}($request,$this->response_instance);
@@ -443,28 +479,29 @@ class Router
             $root = "";
         }
 
-        $path = (strripos($path,"/") == 0)?(substr_replace($path,"",0,0)):$path;
-//        var_dump($root.$path);
-
+        $path = (
+            strripos($path,"/") == 0) ? (substr_replace($path,"",0,0)):$path;
         return $root.$path;
     }
     public function group($path, $callback){
 
         if(is_array($path)){//check if path is associative array or a string
-            $_path = @$path['path'];
-            $_middle_ware = @$path['middleware'];
+            $_path = $path['path'] ?? null;
+            $_middle_ware = $path['middleware'] ?? null;
+            $_fallback = $path['fallback'] ?? null;
         }else{
             $_path = $path;
             $_middle_ware = null;
+            $_fallback  = null;
         }
 
         $real_path = trim($this->real_path);
         if(self::is_root($real_path,self::joinPath($this->root_path,$_path))) {
-            $this->response("ANY", $this->root_path, $_path, $callback, $_middle_ware, true);
+            $this->response("ANY", $this->root_path, $_path, $callback, $_middle_ware,$_fallback, true);
         }
 
     }
-    private function breakController($controller_str){
+    private function breakController($controller_str,$params){
 //        break string
         if(!preg_match("/([\S]+)\-\>([\S]+)/",$controller_str))
             throw new RouterException("Invalid Router String");
@@ -481,7 +518,9 @@ class Router
 //        load_class($class_ini,"controllers");
         $class_ini = $this->controllers_namespace.$class_ini;
         try{
-            $class_ini = new $class_ini();
+            $request = new Request();
+            $request->params = $params;
+            $class_ini = new $class_ini($request,$this->response_instance);
         }catch (\Throwable $e){
             throw new RouterException($e->getMessage().PHP_EOL.$e->getTraceAsString());
         }
@@ -490,11 +529,13 @@ class Router
     }
     private function processMultipleRequestPath($path, $callback, $method){
         if(is_array($path)){//check if path is associative array or a string
-            $_path = @$path['path'];
-            $_middle_ware = @$path['middleware'];
+            $_path = $path['path'] ?? null;
+            $_middle_ware = $path['middleware'] ?? null;
+            $_fallback = $path['fallback'] ?? null;
         }else{
             $_path = $path;
             $_middle_ware = null;
+            $_fallback = null;
         }
         if(is_string($_path)){
             $_path = array_filter(explode("|",$_path),function ($path){
@@ -504,7 +545,7 @@ class Router
 
 
         foreach ($_path as $each_path){
-            $this->processRequest(["path" => trim($each_path),"middleware" => $_middle_ware],$callback,$method);
+            $this->processRequest(["path" => trim($each_path),"middleware" => $_middle_ware,"fallback" => $_fallback],$callback,$method);
         }
 
 
@@ -513,17 +554,19 @@ class Router
 //        echo "<pre>";
 //        var_dump($path);
         if(is_array($path)){//check if path is associative array or a string
-            $_path = @$path['path'];
-            $_middle_ware = @$path['middleware'];
+            $_path = $path['path'] ?? null;
+            $_middle_ware = $path['middleware'] ?? null;
+            $_fallback = $path['fallback'] ?? null;
         }else{
             $_path = $path;
             $_middle_ware = null;
+            $_fallback    = null;
         }
         $real_path = trim($this->real_path);
 //Check if path is the one actively visited in browser
         if((strtoupper($this->request->METHOD) == $method || $method == "ANY") && self::compare_path($real_path,self::joinPath($this->root_path,$_path))) {
 //            Check if $callback is a string, parse appropriate
-            $this->response($method,$this->root_path, $_path, $callback,$_middle_ware);
+            $this->response($method,$this->root_path, $_path, $callback,$_middle_ware,$_fallback);
         }
     }
 
