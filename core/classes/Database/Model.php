@@ -1,18 +1,12 @@
 <?php
 
 
-namespace Path\Database;
+namespace Path\Core\Database;
 
-import(
-    "core/classes/Database/Connection",
-    "core/classes/Misc/Validator"
-);
 
-use Path\Database\Connection\DB;
-use Path\Database\Connection\Mysql;
-use Path\DatabaseException;
-use Path\FileSys;
-use Path\Misc\Validator;
+use Path\Core\Database\Connections\MySql;
+use Path\Core\Error\Exceptions;
+use Path\Core\Misc\Validator;
 
 abstract class Model
 {
@@ -78,10 +72,11 @@ abstract class Model
     private $valid_where_clause_rule = "^([\w\->\[\]\\d.]+)\s*([><=!]+)\\s*([\\w\->\[\]\\d]+)$";
     private $valid_column_rule = "^[_\w\.|\s\(\)\`\\'\",->\[\]!]+$";
     public $total_pages = 0;
+    public $keys;
 
     public function __construct()
     {
-        $this->conn = Mysql::connection();
+        $this->conn = MySql::connection();
         $this->table_columns = $this->getColumns($this->table_name);
         $this->columns = $this->filterNonReadable($this->table_columns);
         $this->model_name =  get_class($this);
@@ -92,6 +87,7 @@ abstract class Model
         $this->primary_key = $this->toFullName($this->primary_key);
         $this->updated_col = $this->toFullName($this->updated_col);
         $this->created_col = $this->toFullName($this->created_col);
+        $this->generatekeys($this->table_name);
     }
     private function toFullName($column)
     {
@@ -128,9 +124,25 @@ abstract class Model
             }
             return $cols;
         } catch (\PDOException $e) {
-            throw new DatabaseException($e->getMessage());
+            throw new Exceptions\Database($e->getMessage());
         }
     }
+
+    private function generatekeys($table)
+    {
+        try {
+            $q = $this->conn->query("DESCRIBE {$table}");
+            $keys = [];
+            foreach ($q as $k) {
+                $keys[] = $k["Field"];
+            }
+            $this->keys = $keys;
+        } catch (\PDOException $e) {
+            throw new Exceptions\Database($e->getMessage());
+        }
+    }
+
+
 
     /**
      * @param $col
@@ -145,7 +157,7 @@ abstract class Model
      * @param $key
      * @param $value
      * @return $this
-     * @throws DatabaseException
+     * @throws Exceptions\Database
      */
     public function set($key, $value)
     {
@@ -153,7 +165,7 @@ abstract class Model
         if ($this->isWritable($key)) {
             $this->writing[$key] = $value;
         } else {
-            throw new DatabaseException("can't write {$key} in {$class_name}");
+            throw new Exceptions\Database("can't write {$key} in {$class_name}");
         }
         return $this;
     }
@@ -248,7 +260,7 @@ abstract class Model
                 $this->query_structure[$type]["query"] .= " {$logic_gate} " . $conditions;
             }
         } else {
-            throw new DatabaseException("Invalid WHERE condition");
+            throw new Exceptions\Database("Invalid WHERE condition");
         }
     }
 
@@ -258,7 +270,7 @@ abstract class Model
      */
     private function isWritable($key)
     {
-        if (in_array(trim($key), $this->writable_cols) || !in_array(trim($key), $this->non_writable_cols)) {
+        if ((in_array(trim($key), $this->writable_cols) || !in_array(trim($key), $this->non_writable_cols)) && in_array(trim($key), $this->table_columns)) {
             return true;
         }
         return false;
@@ -270,7 +282,7 @@ abstract class Model
      */
     public function writable(array $columns)
     {
-        $this->writable_cols = array_merge($this->writable_cols, $columns);
+        $this->writable_cols = array_merge($this->writable_cols, $this->convertColumnsToFull($columns));
         return $this;
     }
 
@@ -280,7 +292,7 @@ abstract class Model
      */
     public function nonWritable(array $columns)
     {
-        $this->non_writable_cols = array_merge($this->non_writable_cols, $columns);
+        $this->non_writable_cols = array_merge($this->non_writable_cols, $this->convertColumnsToFull($columns));
         return $this;
     }
     /**
@@ -289,7 +301,7 @@ abstract class Model
      */
     public function readable(array $columns)
     {
-        $this->readable_cols = array_merge($this->readable_cols, $columns);
+        $this->readable_cols = array_merge($this->readable_cols, $this->convertColumnsToFull($columns));
         return $this;
     }
     /**
@@ -298,7 +310,7 @@ abstract class Model
      */
     public function nonReadable(array $columns)
     {
-        $this->non_readable_cols = array_merge($this->non_readable_cols, $columns);
+        $this->non_readable_cols = array_merge($this->non_readable_cols, $this->convertColumnsToFull($columns));
         return $this;
     }
 
@@ -316,13 +328,10 @@ abstract class Model
     private function filterNonWritable(array $data)
     {
         foreach ($data as $key => $value) {
-            $key = $this->table_name . "." . $key;
-            if (!$this->isWritable($key)) {
-                var_dump($data[$key]);
+            if (!$this->isWritable($this->table_name . '.' . $key)) {
                 unset($data[$key]);
             }
-            if (!in_array($key, $this->table_columns) || $this->isJsonRef($key)) {
-                echo "<br>";
+            if ($this->isJsonRef($key)) {
                 unset($data[$key]);
             }
         }
@@ -413,7 +422,7 @@ abstract class Model
 
     public function whereCreatedSince($days)
     {
-        $where = "from_unixtime({$this->table_name}.{$this->created_col}) >= date_sub(now(), interval {$days} day)";
+        $where = "from_unixtime({$this->created_col}) >= date_sub(now(), interval {$days} day)";
         if ($this->query_structure["WHERE"]["query"]) {
             $this->query_structure["WHERE"]["query"] .= " AND " . $where;
         } else {
@@ -424,7 +433,18 @@ abstract class Model
 
     public function whereUpdatedSince($days)
     {
-        $where = "from_unixtime({$this->table_name}.{$this->updated_col}) >= date_sub(now(), interval {$days} day)";
+        $where = "from_unixtime({$this->updated_col}) >= date_sub(now(), interval {$days} day)";
+        if ($this->query_structure["WHERE"]["query"]) {
+            $this->query_structure["WHERE"]["query"] .= " AND " . $where;
+        } else {
+            $this->query_structure["WHERE"]["query"] = $where;
+        }
+        return $this;
+    }
+
+    public function whereNotUpdatedSince($days)
+    {
+        $where = "from_unixtime({$this->updated_col}) < date_sub(now(), interval {$days} day)";
         if ($this->query_structure["WHERE"]["query"]) {
             $this->query_structure["WHERE"]["query"] .= " AND " . $where;
         } else {
@@ -445,7 +465,7 @@ abstract class Model
         $where,
         ...$params
     ) {
-        if ($this->query_structure["WHERE"]["query"]) {
+        if (strlen(trim($this->query_structure["WHERE"]["query"])) > 0) {
             $this->query_structure["WHERE"]["query"] .= " AND " . $where;
         } else {
             $this->query_structure["WHERE"]["query"] = $where;
@@ -453,13 +473,23 @@ abstract class Model
         $this->params["WHERE"] = array_merge($this->params["WHERE"], $params);
         return $this;
     }
+
+    public function whereColIsNull($col){
+        $this->rawWhere("{$col} IS NULL");
+        return $this;
+    }
+
+    public function whereColIsNotNull($col){
+        $this->rawWhere("{$col} IS NOT NULL");
+        return $this;
+    }
+
     public function identify(
-        $id = false
+        $id
     ) {
         if (!$this->primary_key)
-            throw new DatabaseException("specify primary key in {$this->model_name}");
-        if ($id === false)
-            throw new DatabaseException("specify id in identify method of \"{$this->model_name}\"");
+            throw new Exceptions\Database("specify primary key in {$this->model_name}");
+
 
         $this->where_gen([$this->primary_key => $id], "AND");
         return $this;
@@ -495,7 +525,6 @@ abstract class Model
 
     private function rawColumnGen($cols)
     {
-        //        var_dump($cols);
         foreach ($cols as $col) {
             if ($col instanceof Model) {
                 $this->generateRawSelectFromInstance($col);
@@ -617,7 +646,7 @@ abstract class Model
             $prepare->execute($params);
             $this->clearMemory();
         } catch (\PDOException $e) {
-            throw new DatabaseException($e->getMessage());
+            throw new Exceptions\Database($e->getMessage());
         }
 
         return $this;
@@ -631,14 +660,14 @@ abstract class Model
             $data = array_merge($this->filterNonWritable($data), $this->writing);
 
         //        if(!$data)
-        //            throw new DatabaseException("Error Attempting to update Empty data set");
+        //            throw new Exceptions\Database("Error Attempting to update Empty data set");
         if (!$this->table_name)
-            throw new DatabaseException("No Database table name specified, Configure Your model or  ");
+            throw new Exceptions\Database("No Database table name specified, Configure Your model or  ");
 
         $data[$this->updated_col] = time();
         if ($this->validator instanceof Validator) {
             if ($this->validator->hasError()) {
-                throw new DatabaseException("Validation failed");
+                throw new Exceptions\Database("Validation failed");
             }
         }
 
@@ -656,7 +685,7 @@ abstract class Model
             $prepare->execute($params);
             $this->clearMemory();
         } catch (\PDOException $e) {
-            throw new DatabaseException($e->getMessage());
+            throw new Exceptions\Database($e->getMessage());
         }
 
         return $this;
@@ -686,7 +715,7 @@ abstract class Model
     {
 
         if (!$data)
-            throw new DatabaseException("Error Attempting to update Empty data set");
+            throw new Exceptions\Database("Error Attempting to update Empty data set");
 
         $data[$this->updated_col] = time();
         if ($this->validator instanceof Validator) {
@@ -708,7 +737,7 @@ abstract class Model
             $prepare    = $this->conn->prepare($query); //Prepare query\
             $prepare->execute($params);
         } catch (\PDOException $e) {
-            throw new DatabaseException($e->getMessage());
+            throw new Exceptions\Database($e->getMessage());
         }
 
         return $this;
@@ -722,9 +751,9 @@ abstract class Model
             $data = array_merge($this->filterNonWritable($data), $this->writing);
 
         if (!$data)
-            throw new DatabaseException("Error Attempting to update Empty data set");
+            throw new Exceptions\Database("Error Attempting to update Empty data set");
         if (!$this->table_name)
-            throw new DatabaseException("No Database table name specified, Configure Your model or  ");
+            throw new Exceptions\Database("No Database table name specified, Configure Your model or  ");
         //        add miscellinouse data
         $data[$this->updated_col] = time();
         $data[$this->created_col ?? "date_added"] = time();
@@ -749,14 +778,14 @@ abstract class Model
             $this->last_insert_id = $this->conn->lastInsertId();
             $this->clearMemory();
         } catch (\PDOException $e) {
-            throw new DatabaseException($e->getMessage());
+            throw new Exceptions\Database($e->getMessage());
         }
         return $this;
     }
     public function delete()
     {
         if (!$this->table_name)
-            throw new DatabaseException("No Database table name specified, Configure Your model or  ");
+            throw new Exceptions\Database("No Database table name specified, Configure Your model or  ");
 
         $query = $this->buildWriteRawQuery("DELETE");
         $params = $this->params["WHERE"];
@@ -766,7 +795,7 @@ abstract class Model
             $prepare    = $this->conn->prepare($query); //Prepare query\
             $prepare->execute($params);
         } catch (\PDOException $e) {
-            throw new DatabaseException($e->getMessage());
+            throw new Exceptions\Database($e->getMessage());
         }
         $this->clearMemory();
         return $this;
@@ -776,14 +805,13 @@ abstract class Model
      * @param array $cols
      * @param bool $sing_record
      * @return array|mixed
-     * @throws DatabaseException
+     * @throws Exceptions\Database
      */
     public function all(
         $cols = [],
         $sing_record = false
     ) {
-        if (!is_array($cols) && is_string($cols))
-            $cols = explode(",", $cols);
+
         if (is_array($cols)) {
             if (!$cols) {
                 if ((is_array($this->readable_cols) && count($this->readable_cols) > 0)) {
@@ -798,10 +826,15 @@ abstract class Model
             $cols = $this->filterNonReadable($cols);
 
             //            if(!$cols)
-            //                throw new DatabaseException("Error Attempting to update Empty data set");
+            //                throw new Exceptions\Database("Error Attempting to update Empty data set");
             if (!$this->table_name)
-                throw new DatabaseException("No Database table name specified, Configure Your model or  ");
+                throw new Exceptions\Database("No Database table name specified, Configure Your model or  ");
             if (count($cols) > 0) {
+                $this->rawColumnGen($cols);
+            }
+        }else{
+            if (is_string($cols)){
+                $cols = explode(",", $cols);
                 $this->rawColumnGen($cols);
             }
         }
@@ -809,7 +842,7 @@ abstract class Model
         $params     = array_merge($this->params["SELECT"], $this->params["WHERE"], $this->params["HAVING"], $this->params["LIMIT"]);
 
         //        var_dump($params);
-        //        echo "<br>".$query."<br>";
+//                echo "<br>".$query."<br>";
         try {
             $prepare                = $this->conn->prepare($query); //Prepare query\
             $prepare->execute($params);
@@ -824,7 +857,7 @@ abstract class Model
                 return $prepare->fetchAll(constant("\PDO::{$this->fetch_method}"));
             }
         } catch (\PDOException $e) {
-            throw new DatabaseException($e->getMessage());
+            throw new Exceptions\Database($e->getMessage());
         }
     }
 
@@ -877,7 +910,7 @@ abstract class Model
     /**
      * @param bool $sing_record
      * @return array|mixed
-     * @throws DatabaseException
+     * @throws Exceptions\Database
      * @internal param array $cols
      */
     public function get(
@@ -897,7 +930,7 @@ abstract class Model
         return $this;
     }
 
-    public function getPage($page = 1)
+    public function getPage($page = 1,$cols = [])
     {
         //        get total record
         $page -= 1;
@@ -935,7 +968,7 @@ abstract class Model
     public function like($wild_card)
     {
         if (!$this->query_structure["WHERE"]["query"])
-            throw new DatabaseException("WHERE Clause is empty");
+            throw new Exceptions\Database("WHERE Clause is empty");
 
         $this->query_structure["WHERE"]["query"] .= " LIKE ?";
         $this->params["WHERE"][] = "$wild_card";
@@ -944,7 +977,7 @@ abstract class Model
     public function notLike($wild_card)
     {
         if (!$this->query_structure["WHERE"]["query"])
-            throw new DatabaseException("WHERE Clause is empty");
+            throw new Exceptions\Database("WHERE Clause is empty");
 
         $this->query_structure["WHERE"]["query"] .= " NOT LIKE ?";
         $this->params["WHERE"][] = "$wild_card";
@@ -953,7 +986,7 @@ abstract class Model
     public function between($start, $stop)
     {
         if (!$this->query_structure["WHERE"]["query"])
-            throw new DatabaseException("WHERE Clause is empty");
+            throw new Exceptions\Database("WHERE Clause is empty");
 
         $this->query_structure["WHERE"]["query"] .= " BETWEEN ? AND ?";
         $this->params[] = $start;
@@ -1057,11 +1090,12 @@ abstract class Model
     }
 
     /**
+     * @param $cols
      * @return object
      */
-    public function getFirst()
+    public function getFirst($cols = [])
     {
-        return $this->first();
+        return $this->first($cols);
     }
 
     /**
@@ -1089,9 +1123,8 @@ abstract class Model
      */
     public function count()
     {
-        $this->query_structure["SELECT"]["query"] = "COUNT({$this->primary_key}) as total";
-        $this->groupBy($this->primary_key);
-        return $this->all(null, true)["total"];
+        $this->query_structure["SELECT"]["query"] = "COUNT(*)";
+        return (int) $this->all(null, true)["COUNT(*)"];
     }
 
     /**
@@ -1161,7 +1194,7 @@ abstract class Model
     /**
      * @param array ...$columns
      * @return $this
-     * @throws DatabaseException
+     * @throws Exceptions\Database
      */
     public function select(...$columns)
     {
@@ -1172,10 +1205,10 @@ abstract class Model
             if (is_array($columns)) {
 
                 if (!$this->table_name)
-                    throw new DatabaseException("No Database table name specified, Configure Your model or  ");
+                    throw new Exceptions\Database("No Database table name specified, Configure Your model or  ");
                 $columns = $this->filterNonReadable($columns);
                 if (!$columns)
-                    throw new DatabaseException("Can't read empty sets of columns in \"select()\" Method ");
+                    throw new Exceptions\Database("Can't read empty sets of columns in \"select()\" Method ");
 
                 $this->rawColumnGen($columns);
             } else {
@@ -1222,7 +1255,7 @@ abstract class Model
             $this->query_structure["GROUP_BY"] = join(",", $col);
         } else {
             if (!$this->is_valid_col($col))
-                throw new DatabaseException("Invalid Column name \"{$col}\" in \"groupBy()\" method ");
+                throw new Exceptions\Database("Invalid Column name \"{$col}\" in \"groupBy()\" method ");
 
             $this->query_structure["GROUP_BY"] = $col;
         }
@@ -1308,5 +1341,19 @@ abstract class Model
     {
         $this->where_gen($condition, "AND", "HAVING");
         return $this;
+    }
+
+    /**
+     * @param int $record_per_page
+     * @return $this
+     */
+    public function setRecordPerPage(int $record_per_page)
+    {
+        $this->record_per_page = $record_per_page;
+        return $this;
+    }
+
+    public function getKeys(){
+        return $this->keys;
     }
 }

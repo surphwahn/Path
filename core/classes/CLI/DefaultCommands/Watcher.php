@@ -1,13 +1,12 @@
 <?php
 
 
-namespace Path\Console;
+namespace Path\Core\CLI\DefaultCommands;
 
 
-use Path\Console;
-use Path\WatcherServer;
+use Path\Core\CLI\CInterface;
+use Path\Core\Http\Watcher\Server;
 
-import("core/classes/WatcherServer");
 class Watcher extends CInterface
 {
 
@@ -30,8 +29,7 @@ class Watcher extends CInterface
 
 
     public function __construct()
-    {
-    }
+    { }
 
     /**
      * @param $params
@@ -39,7 +37,6 @@ class Watcher extends CInterface
      */
     public function entry($params)
     {
-        $server = new WatcherServer();
+        $server = new Server();
     }
-
 }

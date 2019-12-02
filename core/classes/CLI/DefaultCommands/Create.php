@@ -6,10 +6,11 @@
  * @Project Path
  */
 
-namespace Path\Console;
+namespace Path\Core\CLI\DefaultCommands;
 
 
-//use Path\Console;
+
+use Path\Core\CLI\CInterface;
 
 class Create extends CInterface
 {
@@ -30,15 +31,19 @@ class Create extends CInterface
         ],
         "model" => [
             "desc" => "create database model, e.g: __path create model yourModelName"
+        ],
+        "email" => [
+            "desc" => "create email Mailable, e.g: __path create email yourTemplateName"
         ]
     ];
 
-    private $models_path = "path/Database/Models/";
+    private $models_path = "path/Database/Model/";
     private $commands_path = "path/Commands/";
     private $route_controllers_path = "path/Controllers/Route/";
     private $live_controllers_path = "path/Controllers/Live/";
     private $migration_files_path = "path/Database/Migration";
     private $middleware_files_path = "path/Http/MiddleWares";
+    private $email_templ_files_path = "path/Mail/Mailables";
     public function entry($params)
     {
         $params = (object)$params;
@@ -52,8 +57,11 @@ class Create extends CInterface
             $this->createMiddleWare($params->middleware);
         } elseif (isset($params->model)) {
             $this->createModel($params->model);
+        }elseif (isset($params->email)){
+            $this->createMailable($params->email);
         }
     }
+
     private function toLower($string)
     {
         return strtolower(preg_replace('/(?<!^)[A-Z]/', '_$0', $string));
@@ -83,10 +91,10 @@ class Create extends CInterface
         $code = "<?php
 
 
-namespace Path\Console;
+namespace Path\App\Commands;
 
 
-use Path\Console;
+use Path\Core\CLI\CInterface;
 
 class $command_file_name extends CInterface
 {
@@ -120,7 +128,7 @@ class $command_file_name extends CInterface
     /**
      * @param \$params
      */
-    public function entry(object \$params)
+    public function entry(\$params)
     {
         var_dump(\$params);
     }
@@ -128,7 +136,7 @@ class $command_file_name extends CInterface
 }
         ";
         fwrite($write_instance, $code);
-        echo PHP_EOL . PHP_EOL . "[+] ----  Database model boiler plate for --{$command_file_name}-- generated in \"{$this->commands_path}\" " . PHP_EOL;
+        $this->write("[+] ----  Database model boiler plate for --`blue`{$command_file_name}`blue`-- generated in `green`\"{$this->commands_path}\"`green` " . PHP_EOL);
         fclose($write_instance);
     }
     private function createController($controller_name)
@@ -194,17 +202,15 @@ class $command_file_name extends CInterface
 * Powered By: Path
 */
 
-namespace Path\\Database\Models;
+namespace Path\\App\\Database\Model;
 
 
-use Path\\Database\\Model;
+use Path\Core\\Database\\Model;
 
 class {$model_name} extends Model
 {
-    protected \$table_name               = \"" . strtolower($model_name) . "\";
-    protected \$non_writable_cols        = [\"id\"];
-    protected \$readable_cols            = [\"id\",\"name\",\"description\"];
-
+    protected \$table_name               = \"" . $this->toLower($model_name) . "\";
+    protected \$primary_key              = \"id\";
     public function __construct()
     {
         parent::__construct();
@@ -212,7 +218,7 @@ class {$model_name} extends Model
 }";
         //        Write model boiler plate code to file
         fwrite($db_model_file, $model_boiler_plate);
-        echo PHP_EOL . PHP_EOL . "[+] ----  Database model boiler plate for --{$model_name}-- generated" . PHP_EOL;
+        echo PHP_EOL . PHP_EOL . "[+] ----  Database model boiler plate for --{$this->toLower($model_name)}-- generated" . PHP_EOL;
         fclose($db_model_file);
     }
     private function writeLiveControllerBoilerPlate($controller_file, $controller_name, $model_name)
@@ -221,12 +227,7 @@ class {$model_name} extends Model
             return strlen(trim($method)) > 0;
         });
 
-        $watcher_type = $this->confirm("SSE or WS? ", ['SSE'], ['WS']);
-        if ($watcher_type == "SSE") {
-            $watcher = "Watcher";
-        } else {
-            $watcher = "SSEWatcher";
-        }
+
         $boiler_plate = "<?php
 /*
 * This Live Controller File Was automatically 
@@ -234,21 +235,17 @@ class {$model_name} extends Model
 * Modify to Suite your needs,
 * */
 
-namespace Path\\Controller\\Live;
+namespace Path\\App\\Controllers\\Live;
 
-use Path\\Storage\\Caches;
-use Path\\Http\\Response;
-use Path\\Http\\Watcher;
-use Path\\LiveController;
-use Path\Database\Models\\$model_name;
-use Path\Storage\Sessions;
+use Path\Core\\Storage\\Caches;
+use Path\Core\\Http\\Response;
+use Path\Core\\Http\\Watcher\\WatcherInterface;
+use Path\Core\\Router\\Live\\Controller;
+use Path\App\\Database\\Model\\$model_name;
+use Path\Core\\Storage\\Sessions;
 
-import(
-    \"core/classes/Database/Model\",
-    \"path/Database/Models/{$model_name}\"
-);
 
-class $controller_name implements LiveController
+class $controller_name extends Controller
 {
     ";
         if (count($watchables) > 0) {
@@ -263,7 +260,7 @@ class $controller_name implements LiveController
         $boiler_plate .= "    
     //every time the watcher checks this Live Controller, it passes some data to it 
     public function __construct(
-        {$watcher}  &\$watcher,//watcher instance
+        WatcherInterface  &\$watcher,//watcher instance
         Sessions \$sessions,//the session instance that can be used for auth. with the client side
         \$message//message sent from User(client Side)
     )
@@ -293,7 +290,7 @@ class $controller_name implements LiveController
                 $boiler_plate .= " 
 public function $method(
         Response \$response,
-        Watcher  &\$watcher,
+        WatcherInterface  &\$watcher,
         Sessions \$sessions,
         ?String  \$message
     ){
@@ -304,13 +301,28 @@ public function $method(
             }
         }
 
-        $boiler_plate .= "        
+        $boiler_plate .= " 
+    public function onMessage(
+        WatcherInterface  &\$watcher,
+        Sessions \$sessions,
+        ?String  \$message
+    ){
 
+    }
+
+    public function onConnect(
+        WatcherInterface  &\$watcher,
+        Sessions \$sessions,
+        ?String  \$message
+    ){
+
+    }
+               
 }
         ";
         //        Write controller boiler plate
         fwrite($controller_file, $boiler_plate);
-        echo PHP_EOL . PHP_EOL . "[+] ----  Controller boiler plate for --{$model_name}-- generated in \"{$this->live_controllers_path}\" " . PHP_EOL;
+        $this->write(PHP_EOL."`light_green`Live Controller Boiler plate code generated in: `light_green` `light_blue`{$this->live_controllers_path}`light_blue`");
         fclose($controller_file);
     }
     private function writeRouteControllerBoilerPlate($controller_file, $controller_name, $model_name)
@@ -323,16 +335,17 @@ public function $method(
 * Powered By: Path
 */
 
-namespace Path\Controller\Route;
+namespace Path\App\\Controllers\\Route;
 
 
-use Path\Controller;
-use Path\Http\Request;
-use Path\Http\Response;
-use Path\Database\Models\\$model_name;
-use Path\Storage\Sessions;
+use Path\Core\\Router\\Route\\Controller;
+use Path\Core\\Http\\Request;
+use Path\Core\\Http\\Response;
+use Path\Core\\Storage\\Sessions;
 
-import(\"path/Database/Models/{$model_name}\");
+use Path\App\Database\Model\\$model_name;
+
+
 
 class {$controller_name} extends Controller
 {
@@ -376,19 +389,15 @@ class {$controller_name} extends Controller
 * Modify to your advantage
 */
 
-namespace Path\Database\Migration;
+namespace Path\App\\Database\\Migration;
 
 
-use Path\Database\Model;
-use Path\Database\Prototype;
-use Path\Database\Structure;
-use Path\Database\Table;
+use Path\Core\Database\Model;
+use Path\Core\Database\Prototype;
+use Path\Core\Database\Structure;
+use Path\Core\Database\Table;
 
-import(
-    \"core/classes/Database/Prototype\",
-    \"core/classes/Database/Table\",
-    \"core/classes/Database/Structure\"
-);
+
 
 class {$table_name} implements Table
 {
@@ -439,12 +448,12 @@ class {$table_name} implements Table
 * Modify to suit your usage
 * 
 */
-namespace Path\Http\\MiddleWare;
+namespace Path\App\Http\\MiddleWares;
 
 
-use Path\Http\\MiddleWare;
-use Path\Http\\Request;
-use Path\Http\\Response;
+use Path\Core\Http\\MiddleWare;
+use Path\Core\Http\\Request;
+use Path\Core\Http\\Response;
 
 class {$middleware_name} implements MiddleWare
 {
@@ -485,5 +494,73 @@ class {$middleware_name} implements MiddleWare
             $db_model_file = fopen($model_file, "w");
             $this->writeModelBoilerPlate($db_model_file, $model_name);
         }
+    }
+    private function createMailable($email_name){
+        $email_name = trim($email_name);
+
+        $email_name = $email_name ?? $this->ask("Enter your email template name", true);
+
+        $templ_file = $this->email_templ_files_path.'/'.$email_name.'.php';
+        if (file_exists($templ_file)) {
+            if ($this->confirm("{$email_name} Email template Already exists, Override?")) {
+                $email_templ_file = fopen($templ_file, "w");
+                $this->writeEmailBoilerCode($email_templ_file, $email_name);
+            }
+        } else {
+            $email_templ_file = fopen($templ_file, "w");
+            $this->writeEmailBoilerCode($email_templ_file, $email_name);
+        }
+    }
+
+    /**
+     * @param $email_templ_file
+     * @param $email_name
+     */
+    private function writeEmailBoilerCode($email_templ_file, $email_name){
+
+        $boiler_plate = "<?php
+
+namespace Path\App\\Mail\\Mailables;
+
+use Path\Core\\Database\\Model;
+use Path\Core\\Mail\\Mailable;
+use Path\Core\\Mail\\State;
+
+
+class {$email_name} extends Mailable
+{
+
+    /*
+    * Change this recipient details or set dynamically
+    */
+    public \$to = [
+        \"email\" => \"recipient@provider.com\",
+        \"name\"  => \"Recipient name\"
+    ];
+
+    /**
+     * TestMail constructor.
+     * @param State \$state
+     */
+    public function __construct(State \$state)
+    {
+    }
+
+    public function title(State \$state):String
+    {
+        return \"this is the title\";
+    }
+
+    public function template(State \$state):String
+    {
+        return \"Hello {\$state->name}\";
+    }
+
+}";
+
+        fwrite($email_templ_file, $boiler_plate);
+        $this->write(PHP_EOL."`green`[+]`green` --  Email Template boiler plate for --`blue`{$email_name}`blue`-- generated in `green`\"{$this->email_templ_files_path}\"`green` " . PHP_EOL);
+        fclose($email_templ_file);
+
     }
 }
